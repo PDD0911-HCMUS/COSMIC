@@ -1,0 +1,5 @@
+# Only the environment definition enters the build context.
+**
+!Dockerfile.gpu
+!requirements.txt
+!requirements-docker.txt

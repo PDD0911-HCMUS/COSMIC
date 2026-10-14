@@ -157,6 +157,14 @@ Train, validation and comparison runners do not open inspection windows.
 
 ## Preparation and dependencies
 
+For shared source/data on radish and GPU training on ginger, follow
+[the lab deployment guide](.devcontainer/README.md). scripts/sync_radish.sh
+publishes the csMachine working copy to shared storage. scripts/lab.sh builds
+and exports the environment on csMachine, then loads it and starts train/valid
+containers on ginger. The container mounts the existing config.yaml paths.
+The shared source is /radish/phamd/duypd-proj/COSMIC, alongside SG-Retrieval,
+with Datasets -> ../SG-Retrieval/Datasets created by the sync script.
+
 See [data/OVSGTR_SETUP.md](data/OVSGTR_SETUP.md) for local inference dependencies,
 CUDA build scripts, assets, provenance and full-graph export. See
 [data/PITTS30K.md](data/PITTS30K.md) for official split download/resume and validation.
@@ -167,13 +175,15 @@ are included in the repository. Dataset images/OSGs, downloaded model weights,
 compiled extensions, caches and experiment outputs are excluded by .gitignore.
 The generated paper figures in materials/figures remain included.
 
-After cloning on Ubuntu, point data.root and validation.data.root in config.yaml
-to the transferred GSV_CITITES and Pitts30k directories. With the lab layout:
+For a direct Python run on Ubuntu, point data.root and validation.data.root in
+config.yaml to the transferred GSV_CITITES and Pitts30k directories. With the lab layout:
 
     data.root: /radish/phamd/duypd-proj/SG-Retrieval/Datasets/GSV_CITITES
     validation.data.root: /radish/phamd/duypd-proj/SG-Retrieval/Datasets/Pitts30k
 
 These are the existing YAML fields to edit, not additional dotted YAML keys.
+For the lab Docker setup, retain Dataset/GSV_CITITES and Pitts30k instead;
+the runtime bind mounts supply those paths inside the container.
 Keep each dataset's images, metadata and osg directories together. Prepared
 OSGs use relative image paths and do not require regeneration after transfer.
 

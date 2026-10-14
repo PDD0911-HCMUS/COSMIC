@@ -1,0 +1,79 @@
+# Runtime on ginger. The image must already be loaded; no build/pull occurs here.
+name: ${COSMIC_PROJECT_NAME:-cosmic}
+
+services:
+  cosmic:
+    image: ${COSMIC_IMAGE:-cosmic:torch2.7.1-cu118}
+    pull_policy: never
+    working_dir: /workspace/app
+    command: ["sleep", "infinity"]
+    init: true
+    shm_size: ${COSMIC_SHM_SIZE:-2gb}
+    environment:
+      PYTHONPATH: /workspace/app
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: all
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      HF_HOME: /workspace/app/.cache/huggingface
+      HF_HUB_CACHE: /workspace/app/.cache/huggingface/hub
+      TORCH_HOME: /workspace/app/.cache/torch
+      MPLCONFIGDIR: /workspace/app/.cache/matplotlib
+      HF_HUB_OFFLINE: ${COSMIC_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${COSMIC_OFFLINE:-1}
+    volumes:
+      - type: bind
+        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH to the source directory on radish}
+        target: /workspace/app
+        bind:
+          create_host_path: false
+      - type: bind
+        # Resolve app/Datasets -> ../SG-Retrieval/Datasets inside the container.
+        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH}/Datasets
+        target: /workspace/SG-Retrieval/Datasets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        # Preserve the existing YAML's singular Dataset path.
+        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH}/Datasets
+        target: /workspace/app/Dataset
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH}/Datasets/Pitts30k
+        target: /workspace/app/Pitts30k
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${COSMIC_CACHE_PATH:-${COSMIC_SOURCE_PATH}/.cache}
+        target: /workspace/app/.cache
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${COSMIC_OUTPUT_PATH:-${COSMIC_SOURCE_PATH}/outputs}
+        target: /workspace/app/outputs
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${COSMIC_WEIGHTS_PATH:-${COSMIC_SOURCE_PATH}/data/OvSGTR/weights}
+        target: /workspace/app/data/OvSGTR/weights
+        read_only: true
+        bind:
+          create_host_path: false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

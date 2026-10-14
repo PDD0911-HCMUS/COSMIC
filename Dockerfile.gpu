@@ -1,0 +1,33 @@
+# Environment only: source, datasets, weights and outputs are mounted at runtime.
+# CUDA wheels include user-space CUDA libraries; ginger provides the driver.
+FROM python:3.10-slim-bookworm
+
+ARG TORCH_VERSION=2.7.1
+ARG TORCHVISION_VERSION=0.22.1
+ARG TORCH_CUDA=cu118
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    TOKENIZERS_PARALLELISM=false \
+    HF_HOME=/workspace/app/.cache/huggingface \
+    HF_HUB_CACHE=/workspace/app/.cache/huggingface/hub \
+    TORCH_HOME=/workspace/app/.cache/torch \
+    MPLCONFIGDIR=/workspace/app/.cache/matplotlib
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates libgomp1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/cosmic-environment
+COPY requirements.txt requirements-docker.txt ./
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
+       --index-url "https://download.pytorch.org/whl/${TORCH_CUDA}" \
+    && python -m pip install -r requirements-docker.txt \
+    && python -m pip check \
+    && python -c "import torch, torchvision, transformers, scipy, PIL, yaml; print('torch:', torch.__version__, 'CUDA runtime:', torch.version.cuda)"
+
+WORKDIR /workspace/app
+CMD ["sleep", "infinity"]

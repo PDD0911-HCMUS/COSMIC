@@ -18,7 +18,7 @@ htmlcov/
 
 # Local datasets, including Windows junctions to external disks.
 /Dataset/
-/Datasets/
+/Datasets
 /dataset/
 /datasets/
 /Pitts30k/
@@ -76,6 +76,8 @@ dist/
 .env
 .env.*
 !.env.example
+/.devcontainer/devcontainer.env
+/.cosmic-revision
 /.agents/
 /.codex/
 /.aws/
