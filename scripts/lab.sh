@@ -72,12 +72,24 @@ case "$action" in
         archive="${1:-$default_archive}"
         image="$(build_compose config --images)"
         mkdir -p -- "$(dirname -- "$archive")"
-        "${docker_cmd[@]}" image save --output "$archive" "$image"
+        # Docker's --output writer chmods its temporary file on close. CIFS
+        # can reject that operation even when the CLI reports success.
+        # Let this shell write the stream, then publish the completed archive.
+        partial="$archive.part"
+        [[ ! -L "$partial" ]] || { echo "Refusing to overwrite symlink: $partial" >&2; exit 1; }
+        if ! "${docker_cmd[@]}" image save "$image" > "$partial"; then
+            echo "Image export failed; incomplete archive: $partial" >&2
+            exit 1
+        fi
+        [[ -f "$partial" && -s "$partial" ]] || { echo "Image export produced an empty archive: $partial" >&2; exit 1; }
+        mv -f -- "$partial" "$archive"
+        [[ -f "$archive" && -s "$archive" ]] || { echo "Image archive is missing or empty: $archive" >&2; exit 1; }
+        ls -lh -- "$archive"
         printf 'Image saved: %s\n' "$archive"
         ;;
     load-image)
         archive="${1:-$default_archive}"
-        [[ -f "$archive" ]] || { echo "Missing image archive: $archive" >&2; exit 1; }
+        [[ -f "$archive" && -s "$archive" ]] || { echo "Missing or empty image archive: $archive" >&2; exit 1; }
         "${docker_cmd[@]}" image load --input "$archive"
         ;;
     config)

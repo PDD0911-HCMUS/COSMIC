@@ -141,6 +141,21 @@ and requirement files into the build context. No GPU is needed during build.
 The archive is saved under outputs/docker on radish, so ginger can read it
 without another network copy or registry.
 
+Export writes Docker's stdout stream to cosmic-training-image.tar.part, then
+renames the completed, nonempty file to cosmic-training-image.tar. This avoids
+Docker's --output permission changes on CIFS. The script shows the file size
+and prints Image saved only after checking that the final archive exists.
+Failed exports leave a .part file for inspection.
+
+After Image saved, verify the archive on ginger before loading it:
+
+    ls -lh outputs/docker/cosmic-training-image.tar
+
+If ginger cannot see it, compare the share mounted at the archive directory on
+both machines:
+
+    findmnt -T /radish/phamd/duypd-proj/COSMIC/outputs/docker -o TARGET,SOURCE,FSTYPE
+
 The scripts explicitly use the local default Docker context. They do not change
 your global context. COSMIC_DOCKER_CONTEXT can select an existing context when
 deliberately controlling another daemon.
