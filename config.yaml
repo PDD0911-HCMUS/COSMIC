@@ -1,0 +1,158 @@
+# Cấu hình tổng COSMIC: chỉnh các tham số tại đây.
+# mode: prepare / train / evaluate; validation.data selects Pitts30k-val.
+# AmsterTime chỉ dùng evaluation, không dùng train/chọn checkpoint.
+
+name: cosmic_gsv
+mode: train
+seed: 42
+device: auto
+
+# GSV: batch_size tính theo số cặp; 2 × batch_size = P địa điểm × K ảnh.
+data:
+  dataset: gsv  # Tên trong DATASET_NAMES của registry.py.
+  root: Dataset/GSV_CITITES
+  osg_root: null
+  batch_size: 32  # 32 cặp: 16 positive + 16 negative; 64 ảnh từ 16 địa điểm.
+  images_per_place: 4  # 4 ảnh/địa điểm, mỗi ảnh dùng một lần trong batch.
+  num_workers: 4  # Đã đo trên máy RTX 3070 / RAM 64 GB; giúp đọc OSG nhanh hơn.
+  shuffle: true
+  pin_memory: true
+  drop_last: true
+  load_osg: true  # Training yêu cầu toàn bộ OSG đã export.
+  image_size: [224, 224]
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  horizontal_flip_prob: 0.0
+  graph:
+    object_threshold: 0.25
+    relation_threshold: 0.2
+    max_nodes: 32
+    max_edges: 100
+    edge_rank_by: triplet_score
+
+# DINO đã có ViT encoder; Transformer bổ sung chỉ áp dụng cho ResNet.
+model:
+  visual_encoder:
+    backbone: dinov2_vits14  # dinov2_vitb14 / resnet18 / resnet50.
+    pretrained: true
+    freeze_backbone: true
+    checkpoint: null  # ResNet: state_dict .pth; DINO: thư mục Hugging Face.
+    cache_dir: .cache/visual_backbones
+    local_files_only: false
+    d_model: 256
+    global_dim: 256
+    resnet_stage: layer3
+    transformer_layers: 2
+    transformer_heads: 8
+    transformer_ffn_dim: 1024
+    transformer_dropout: 0.1
+  osg_encoder:
+    backbone: bert-base-uncased
+    checkpoint: data/OvSGTR/weights/bert-base-uncased
+    cache_dir: .cache/osg_encoder
+    local_files_only: true
+    freeze_backbone: true
+    d_model: 256
+    global_dim: 256
+    max_length: 64
+    text_batch_size: 64
+    cache_size: 4096  # Cache embedding BERT trước projection; 0 để tắt.
+    pooling: confidence  # confidence / mean.
+    use_bbox_embedding: false  # Bbox luôn giữ cho grounding; bật để cộng embedding hình học vào node.
+
+  grounding:
+    num_heads: 4
+    ffn_dim: 512
+    dropout: 0.1
+    use_self_attention: true
+    use_bbox_bias: true
+    bbox_bias_strength: 2.0
+    pooling: confidence  # confidence / mean; pooled h^F is L2-normalized.
+
+  alignment:
+    num_heads: 4
+    temperature: 0.1
+    unmatched_score: 0.5  # Initial null score on the cosine scale, not a probability.
+    learn_unmatched_score: true
+    use_hungarian: true
+
+  verification:
+    num_heads: 4
+    ffn_dim: 512
+    dropout: 0.1
+    max_patches: 32  # Bounded samples inside each node/endpoint-union region.
+    pair_chunk_size: 32
+    use_graph_guidance: true
+    pooling: confidence  # Alignment cosine weights; fallback to mean if all <= 0.
+
+  scene_similarity:
+    hidden_dim: 256
+    dropout: 0.1
+
+  criteria:
+    retrieval_weight: 1.0
+    verification_weight: 1.0
+    retrieval_temperature: 0.1  # SupCon temperature, separate from alignment.
+
+# Thông số sử dụng bởi train_engine.py.
+training:
+  epochs: 50
+  precision: fp32
+  accumulation_steps: 1
+  grad_clip_norm: 1.0
+  validate_every: 1
+  log_every: 50
+  max_batches_per_epoch: null
+  optimizer:
+    name: adamw
+    lr: 0.0001
+    weight_decay: 0.0001
+  scheduler:
+    name: cosine
+    warmup_epochs: 0
+    min_lr: 1.0e-06
+
+validation:
+  data:
+    dataset: pitts30k
+    root: Pitts30k
+    batch_size: 8
+    num_workers: 0
+    shuffle: false
+    drop_last: false
+    load_osg: true
+    horizontal_flip_prob: 0.0
+  recall_k: [1, 5, 10, 20]
+  query_chunk_size: 128
+  database_chunk_size: 4096
+  pair_threshold: 0.5
+  log_every: 50
+  save_reports: true
+  directory: validation
+
+# Checkpoint: directory nằm trong output.root; resume tính từ thư mục dự án.
+save:
+  enabled: true
+  directory: checkpoints
+  save_every: 5
+  keep_last: 3
+  save_best: true
+  monitor: recall@1
+  mode: max
+  resume: null
+
+# Output của lần chạy. timestamp: true để tạo thư mục riêng mỗi lần.
+output:
+  root: outputs/gsv
+  timestamp: false
+  visualizations: visualizations
+  show: true
+  save_config: true
+
+# Sinh OSG: max_items là số ảnh gsv hoặc số cặp AmsterTime; null = tất cả.
+export:
+  graph_format: json_gzip  # Full graph, nén gzip không mất thông tin (.json.gz).
+  max_items: null
+  overwrite: false
+  object_threshold: 0.0
+  relation_threshold: 0.0

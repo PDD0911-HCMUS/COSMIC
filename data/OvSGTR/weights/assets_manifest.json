@@ -1,0 +1,18 @@
+{
+  "JosephZ/OvSGTR": {
+    "revision": "fcc06f474c8760b003fe4a2cfb2b3da68c573721",
+    "files": [
+      "vg-ovdr-swint.pth"
+    ]
+  },
+  "google-bert/bert-base-uncased": {
+    "revision": "86b5e0934494bd15c9632b12f734a8a67f723594",
+    "files": [
+      "config.json",
+      "pytorch_model.bin",
+      "tokenizer.json",
+      "tokenizer_config.json",
+      "vocab.txt"
+    ]
+  }
+}

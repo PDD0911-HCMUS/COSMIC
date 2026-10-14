@@ -1,0 +1,61 @@
+# Compare on the full AmsterTime benchmark; keep it separate from checkpoint selection.
+dataset: amstertime
+data_root: Dataset/AmsterTime
+osg_root: null
+expected_pairs: 1231
+device: cpu  # Change to cuda when you want to run inference on the GPU.
+seed: 42
+batch_size: 8  # Inference images, not training pairs; methods can override this.
+num_workers: 0
+cpu_threads: 2
+recall_k: [1, 5, 10]
+metric: l2  # Native descriptors, including PCA magnitudes; cosine is also available.
+query_chunk_size: 128
+database_chunk_size: 4096
+log_every: 20
+max_queries: null  # Smoke option limits queries only; database always remains complete.
+output_root: outputs/comparison
+hub_dir: .cache/comparison_hub
+
+# Names are free-form. adapter must exist in comparison/registry.py.
+# Supply official GSV-trained checkpoints and local copies of the author repos.
+methods:
+  cosmic:
+    adapter: cosmic
+    config: configs/amstertime.yaml
+    checkpoint: outputs/gsv/checkpoints/best.pt
+    stages: [retrieval, rerank]
+    rerank_top_k: 100  # Choose on validation, then fix before test.
+  mixvpr:
+    adapter: mixvpr
+    repo: comparison/external/MixVPR
+    checkpoint: comparison/weights/mixvpr_resnet50_4096.ckpt
+  boq_resnet50:
+    adapter: boq
+    repo: comparison/external/Bag-of-Queries
+    checkpoint: comparison/weights/boq_resnet50_16384.pth
+    params:
+      backbone: resnet50
+  boq_dinov2:
+    adapter: boq
+    repo: comparison/external/Bag-of-Queries
+    checkpoint: comparison/weights/boq_dinov2_12288.pth
+    params:
+      backbone: dinov2
+      dinov2_repo: null  # Optional local facebookresearch/dinov2 source repo.
+  cricavpr:
+    adapter: cricavpr
+    repo: comparison/external/CricaVPR
+    checkpoint: comparison/weights/CricaVPR.pth
+    batch_size: 16  # Official inference setting for datasets other than Pittsburgh.
+    pca: null  # Native 10752-D; supply training-fitted PCA tensors to evaluate 4096-D.
+  fol:
+    adapter: fol
+    repo: comparison/external/FoL
+    checkpoint: comparison/weights/FoL_large.pth
+    stages: [retrieval, rerank]
+    rerank_top_k: 100
+    params:
+      backbone: vitl
+      dinov2_repo: null
+      local_threshold: 0.7

@@ -1,0 +1,49 @@
+# Pitts30k-val: full retrieval validation and source OSG preparation.
+# Image/OSG preprocessing and default model settings match the GSV experiment.
+name: cosmic_pitts30k_val
+mode: evaluate
+seed: 42
+device: cpu
+
+data:
+  dataset: pitts30k
+  root: Pitts30k
+  batch_size: 8
+  num_workers: 0
+  shuffle: false
+  pin_memory: false
+  drop_last: false
+  load_osg: true
+  image_size: [224, 224]
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  horizontal_flip_prob: 0.0
+  graph:
+    object_threshold: 0.25
+    relation_threshold: 0.2
+    max_nodes: 32
+    max_edges: 100
+    edge_rank_by: triplet_score
+
+validation:
+  recall_k: [1, 5, 10, 20]
+  log_every: 50
+  save_reports: true
+  directory: validation
+
+save:
+  enabled: false
+  resume: null  # Override with --resume to evaluate a completed GSV checkpoint.
+
+output:
+  root: outputs/pitts30k
+  timestamp: false
+  show: false
+  save_config: true
+
+export:
+  max_items: null
+  overwrite: false
+  object_threshold: 0.0
+  relation_threshold: 0.0
+  graph_format: json_gzip

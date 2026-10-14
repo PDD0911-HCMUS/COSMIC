@@ -1,0 +1,9 @@
+# Configuration reader. PyTorch/OvSGTR setup is documented in data/OVSGTR_SETUP.md.
+PyYAML>=6.0,<7
+# DINOv2 adapter; same Transformers version as the installed OvSGTR setup.
+transformers==4.40.2
+# Partial Hungarian matching of encoded graph tokens.
+scipy>=1.12,<2
+# Pitts30k resumable downloads and the GPU preparation queue.
+requests>=2.31,<3
+psutil>=5.9,<8

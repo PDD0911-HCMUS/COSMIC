@@ -1,0 +1,90 @@
+# Python bytecode, tooling caches and local environments.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+/.venv/
+/.venv-*/
+/venv/
+/env/
+/.cache/
+
+# Local datasets, including Windows junctions to external disks.
+/Dataset/
+/Datasets/
+/dataset/
+/datasets/
+/Pitts30k/
+
+# Generated experiment outputs, checkpoints and baseline assets.
+/outputs/
+/runs/
+/wandb/
+/lightning_logs/
+/checkpoints/
+/weights/
+/artifacts/
+/comparison/external/
+/comparison/weights/
+*.log
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.engine
+*.trt
+*.bin
+
+# Keep the small OvSGTR inference sources, licenses and pinned asset manifest.
+# Downloaded weights and tokenizers stay local.
+/data/OvSGTR/weights/*
+!/data/OvSGTR/weights/assets_manifest.json
+
+# Build products, including machine-specific GroundingDINO extensions.
+build/
+dist/
+*.egg-info/
+*.so
+*.pyd
+*.dll
+*.o
+*.obj
+*.lib
+*.exp
+*.a
+
+# Download archives and interrupted transfers.
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.part
+*.tmp
+*.bak
+
+# Local credentials, editor settings and operating-system files.
+.env
+.env.*
+!.env.example
+/.agents/
+/.codex/
+/.aws/
+/.ssh/
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
