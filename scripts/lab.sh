@@ -74,18 +74,18 @@ run_python() {
     ' cosmic "$action" "$@")
     if [[ "$detached" == 1 ]]; then
         local container_id
-        container_id="$(compose run --no-deps --pull never -d -T "${cuda_env_args[@]}" cosmic "${command[@]}")"
+        container_id="$(compose run --no-deps -d -T "${cuda_env_args[@]}" cosmic "${command[@]}")"
         printf 'Training container: %s\nFollow logs: bash scripts/lab.sh logs %s\n' "$container_id" "$container_id"
     else
-        compose run --rm --no-deps --pull never -T "${cuda_env_args[@]}" cosmic "${command[@]}"
+        compose run --rm --no-deps -T "${cuda_env_args[@]}" cosmic "${command[@]}"
     fi
 }
 
 case "$action" in
     build) compose build "$@" cosmic ;;
-    up) compose up -d --no-build --pull never cosmic ;;
+    up) compose up -d --no-build cosmic ;;
     shell) compose exec cosmic bash ;;
-    restart) compose up -d --no-build --pull never --force-recreate cosmic ;;
+    restart) compose up -d --no-build --force-recreate cosmic ;;
     config) compose config "$@" ;;
     check) run_python 0 python -B scripts/check_lab_runtime.py "$@" ;;
     train)
