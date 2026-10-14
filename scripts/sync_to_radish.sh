@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copy source from csMachine to radish using cp.
-# Usage: bash scripts/sync_radish.sh [destination/COSMIC]
+# Usage: bash scripts/sync_to_radish.sh [destination/COSMIC]
 set -euo pipefail
 
 source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"

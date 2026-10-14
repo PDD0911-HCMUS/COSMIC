@@ -158,10 +158,10 @@ Train, validation and comparison runners do not open inspection windows.
 ## Preparation and dependencies
 
 For shared source/data on radish and GPU training on ginger, follow
-[the lab deployment guide](.devcontainer/README.md). scripts/sync_radish.sh
-publishes the csMachine working copy to shared storage. scripts/lab.sh builds
-and exports the environment on csMachine, then loads it and starts train/valid
-containers on ginger. The container mounts the existing config.yaml paths.
+[the lab deployment guide](.devcontainer/README.md). scripts/sync_to_radish.sh
+copies the csMachine working copy to shared storage. On ginger, scripts/lab.sh
+builds the project's cosmic:gpu-dev image and starts train/valid containers.
+Model cache, logs, checkpoints and results persist on radish.
 The shared source is /radish/phamd/duypd-proj/COSMIC, alongside SG-Retrieval,
 and the copy script uses cp to update source files. Docker mounts
 SG-Retrieval/Datasets directly at /workspace/app/Datasets.

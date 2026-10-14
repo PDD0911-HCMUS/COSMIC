@@ -1,4 +1,4 @@
-# Environment only: source, datasets, weights and outputs are mounted at runtime.
+# Built on ginger from the Dockerfile on radish. Runtime source is bind-mounted.
 # CUDA wheels include user-space CUDA libraries; ginger provides the driver.
 FROM python:3.10-slim-bookworm
 
@@ -11,8 +11,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     TOKENIZERS_PARALLELISM=false \
-    HF_HOME=/workspace/app/.cache/huggingface \
-    HF_HUB_CACHE=/workspace/app/.cache/huggingface/hub \
+    HF_HOME=/workspace/.cache/huggingface \
+    HF_HUB_CACHE=/workspace/.cache/huggingface/hub \
     TORCH_HOME=/workspace/app/.cache/torch \
     MPLCONFIGDIR=/workspace/app/.cache/matplotlib
 

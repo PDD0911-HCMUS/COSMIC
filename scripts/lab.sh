@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run build/export on csMachine; load/check/train/valid on ginger.
+# csMachine copies source; ginger builds and runs COSMIC from the radish share.
 set -euo pipefail
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -9,115 +9,92 @@ if (($#)); then shift; fi
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/lab.sh ACTION [arguments]
-  build                  Build the environment image on csMachine.
-  export-image [file]     Save the image to a shared /radish archive.
-  load-image [file]       Load that archive into Docker on ginger.
-  config                 Show the resolved runtime Compose configuration.
-  check                  Check GPU, mounted data, and local BERT/DINO assets.
-  train [main.py args]    Run GSV training with periodic Pitts30k validation.
-  train --detach [args]   Run in the background and print a container ID.
-  valid [main.py args]    Evaluate best.pt on Pitts30k-val.
-  up                     Start an idle container for a development terminal.
-  shell                  Open a terminal in the idle development container.
-  logs CONTAINER_ID      Follow a detached job's logs.
+On csMachine: bash scripts/sync_to_radish.sh
+On ginger:    bash scripts/lab.sh ACTION [arguments]
 
-The default Docker context is "default" on the machine running this script.
-Override COSMIC_DOCKER_CONTEXT explicitly if using a configured remote context.
-All GPUs are exposed to the container. Select GPUs for a command with, e.g.:
-  CUDA_VISIBLE_DEVICES=3 bash scripts/lab.sh train --detach
-  CUDA_VISIBLE_DEVICES=3 bash scripts/lab.sh valid
-Default image archive: outputs/docker/cosmic-training-image.tar
+  build                  Build COSMIC's own cosmic:gpu-dev image on ginger.
+  up                     Start an idle development container.
+  shell                  Open its terminal (/workspace/app).
+  check                  Check data, pretrained encoders and CUDA.
+  train [main.py args]    Train GSV with periodic Pitts30k validation.
+  train --detach [args]   Train in the background; print the container ID.
+  valid [main.py args]    Evaluate outputs/gsv/checkpoints/best.pt.
+  logs CONTAINER_ID      Follow a COSMIC job's output.
+  restart                Recreate the idle container after an image rebuild.
+  config                 Show the resolved Compose configuration.
+
+Select the GPU per command: CUDA_VISIBLE_DEVICES=3 bash scripts/lab.sh train
+Source, model cache, logs and results stay on radish.
+Build again after changing Dockerfile.gpu or requirements.
 EOF
 }
 
 case "$action" in
     help|-h|--help) usage; exit 0 ;;
-    build|export-image|load-image|config|check|train|valid|up|shell|logs) ;;
+    build|up|shell|check|train|valid|logs|restart|config) ;;
     *) usage >&2; exit 2 ;;
 esac
-
 command -v docker >/dev/null || { echo "Docker CLI is missing." >&2; exit 1; }
-docker_cmd=(docker --context "${COSMIC_DOCKER_CONTEXT:-default}")
+docker_cmd=(docker --context default)
 if [[ "$action" == logs ]]; then
-    (($#)) || { echo "Pass the training container ID." >&2; exit 2; }
+    (($#)) || { echo "Pass the COSMIC container ID." >&2; exit 2; }
     exec "${docker_cmd[@]}" logs --follow "$@"
 fi
-[[ -f "$env_file" ]] || {
-    echo "Missing $env_file. Copy .devcontainer/devcontainer.env.example to .devcontainer/.env and configure paths." >&2
-    exit 1
+[[ -z "${COSMIC_ENV_FILE:-}" || -f "$env_file" ]] || {
+    echo "Missing requested environment file: $env_file" >&2; exit 1;
 }
+compose_args=(-f "$project_dir/.devcontainer/docker-compose.yml")
+if [[ -f "$env_file" ]]; then
+    compose_args=(--env-file "$env_file" "${compose_args[@]}")
+fi
+compose() { "${docker_cmd[@]}" compose "${compose_args[@]}" "$@"; }
 
-runtime_compose() {
-    "${docker_cmd[@]}" compose --env-file "$env_file" \
-        -f "$project_dir/.devcontainer/docker-compose.yml" "$@"
-}
-build_compose() {
-    "${docker_cmd[@]}" compose --env-file "$env_file" \
-        -f "$project_dir/.devcontainer/docker-compose.build.yml" "$@"
-}
-# Docker does not automatically forward the host's CUDA process mask.
-# Preserve an explicitly empty value as well: it intentionally hides all GPUs.
+case "$action" in
+    train|valid|check|up|restart)
+        "${docker_cmd[@]}" image inspect cosmic:gpu-dev >/dev/null 2>&1 || {
+            echo "Build cosmic:gpu-dev on ginger first: bash scripts/lab.sh build" >&2
+            exit 1
+        }
+        ;;
+esac
 cuda_env_args=()
 if [[ -v CUDA_VISIBLE_DEVICES ]]; then
     cuda_env_args=(-e "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES")
 fi
-default_archive="$project_dir/outputs/docker/cosmic-training-image.tar"
+
+run_python() {
+    local detached="$1"
+    shift
+    local command=(bash -e -o pipefail -c '
+        task="$1"; shift
+        mkdir -p outputs/logs
+        log_file="$(mktemp "outputs/logs/${task}_$(TZ=JST-9 date +%Y%m%d_%H%M%S).XXXXXX.log")"
+        printf "Log: %s\n" "$log_file"
+        "$@" 2>&1 | tee "$log_file"
+    ' cosmic "$action" "$@")
+    if [[ "$detached" == 1 ]]; then
+        local container_id
+        container_id="$(compose run --no-deps --pull never -d -T "${cuda_env_args[@]}" cosmic "${command[@]}")"
+        printf 'Training container: %s\nFollow logs: bash scripts/lab.sh logs %s\n' "$container_id" "$container_id"
+    else
+        compose run --rm --no-deps --pull never -T "${cuda_env_args[@]}" cosmic "${command[@]}"
+    fi
+}
 
 case "$action" in
-    build)
-        build_compose build "$@" cosmic
-        ;;
-    export-image)
-        archive="${1:-$default_archive}"
-        image="$(build_compose config --images)"
-        mkdir -p -- "$(dirname -- "$archive")"
-        # Docker's --output writer chmods its temporary file on close. CIFS
-        # can reject that operation even when the CLI reports success.
-        # Let this shell write the stream, then publish the completed archive.
-        partial="$archive.part"
-        [[ ! -L "$partial" ]] || { echo "Refusing to overwrite symlink: $partial" >&2; exit 1; }
-        if ! "${docker_cmd[@]}" image save "$image" > "$partial"; then
-            echo "Image export failed; incomplete archive: $partial" >&2
-            exit 1
-        fi
-        [[ -f "$partial" && -s "$partial" ]] || { echo "Image export produced an empty archive: $partial" >&2; exit 1; }
-        mv -f -- "$partial" "$archive"
-        [[ -f "$archive" && -s "$archive" ]] || { echo "Image archive is missing or empty: $archive" >&2; exit 1; }
-        ls -lh -- "$archive"
-        printf 'Image saved: %s\n' "$archive"
-        ;;
-    load-image)
-        archive="${1:-$default_archive}"
-        [[ -f "$archive" && -s "$archive" ]] || { echo "Missing or empty image archive: $archive" >&2; exit 1; }
-        "${docker_cmd[@]}" image load --input "$archive"
-        ;;
-    config)
-        runtime_compose config "$@"
-        ;;
-    check)
-        runtime_compose run --rm --no-deps --pull never -T "${cuda_env_args[@]}" cosmic \
-            python -B scripts/check_lab_runtime.py "$@"
-        ;;
+    build) compose build "$@" cosmic ;;
+    up) compose up -d --no-build --pull never cosmic ;;
+    shell) compose exec cosmic bash ;;
+    restart) compose up -d --no-build --pull never --force-recreate cosmic ;;
+    config) compose config "$@" ;;
+    check) run_python 0 python -B scripts/check_lab_runtime.py "$@" ;;
     train)
-        args=(python -u -B main.py --config config.yaml --mode train --device cuda)
-        if [[ "${1:-}" == --detach ]]; then
-            shift
-            container_id="$(runtime_compose run --no-deps --pull never -d -T "${cuda_env_args[@]}" cosmic "${args[@]}" "$@")"
-            printf 'Training container: %s\nFollow logs: bash scripts/lab.sh logs %s\n' "$container_id" "$container_id"
-        else
-            runtime_compose run --rm --no-deps --pull never -T "${cuda_env_args[@]}" cosmic "${args[@]}" "$@"
-        fi
+        detached=0
+        if [[ "${1:-}" == --detach ]]; then detached=1; shift; fi
+        run_python "$detached" python -u -B main.py --config config.yaml --mode train --device cuda "$@"
         ;;
     valid)
-        runtime_compose run --rm --no-deps --pull never -T "${cuda_env_args[@]}" cosmic \
-            python -u -B main.py --config configs/pitts30k.yaml --mode evaluate \
+        run_python 0 python -u -B main.py --config configs/pitts30k.yaml --mode evaluate \
             --device cuda --resume outputs/gsv/checkpoints/best.pt "$@"
-        ;;
-    up)
-        runtime_compose up -d --no-build --pull never cosmic
-        ;;
-    shell)
-        runtime_compose exec cosmic bash
         ;;
 esac

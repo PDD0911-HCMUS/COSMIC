@@ -1,9 +1,12 @@
-# Runtime on ginger. The image must already be loaded; no build/pull occurs here.
+# Build and run on ginger; source, datasets, model cache and results live on radish.
 name: ${COSMIC_PROJECT_NAME:-cosmic}
 
 services:
   cosmic:
-    image: ${COSMIC_IMAGE:-cosmic:torch2.7.1-cu118}
+    image: cosmic:gpu-dev
+    build:
+      context: ..
+      dockerfile: Dockerfile.gpu
     pull_policy: never
     working_dir: /workspace/app
     command: ["sleep", "infinity"]
@@ -17,50 +20,55 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       NVIDIA_VISIBLE_DEVICES: all
       CUDA_DEVICE_ORDER: PCI_BUS_ID
-      HF_HOME: /workspace/app/.cache/huggingface
-      HF_HUB_CACHE: /workspace/app/.cache/huggingface/hub
+      HF_HOME: /workspace/.cache/huggingface
+      HF_HUB_CACHE: /workspace/.cache/huggingface/hub
       TORCH_HOME: /workspace/app/.cache/torch
       MPLCONFIGDIR: /workspace/app/.cache/matplotlib
       HF_HUB_OFFLINE: ${COSMIC_OFFLINE:-1}
       TRANSFORMERS_OFFLINE: ${COSMIC_OFFLINE:-1}
     volumes:
       - type: bind
-        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH to the source directory on radish}
+        source: ${COSMIC_SOURCE_PATH:-..}
         target: /workspace/app
         bind:
           create_host_path: false
       - type: bind
         # Read existing NAS datasets directly; no host symlink is required.
-        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH}/../SG-Retrieval/Datasets}
+        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH:-..}/../SG-Retrieval/Datasets}
         target: /workspace/app/Datasets
         read_only: true
         bind:
           create_host_path: false
       - type: bind
         # Preserve the existing YAML's singular Dataset path.
-        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH}/../SG-Retrieval/Datasets}
+        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH:-..}/../SG-Retrieval/Datasets}
         target: /workspace/app/Dataset
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH}/../SG-Retrieval/Datasets}/Pitts30k
+        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH:-..}/../SG-Retrieval/Datasets}/Pitts30k
         target: /workspace/app/Pitts30k
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${COSMIC_CACHE_PATH:-${COSMIC_SOURCE_PATH}/.cache}
+        source: ${COSMIC_CACHE_PATH:-${COSMIC_SOURCE_PATH:-..}/.cache}
         target: /workspace/app/.cache
         bind:
           create_host_path: true
       - type: bind
-        source: ${COSMIC_OUTPUT_PATH:-${COSMIC_SOURCE_PATH}/outputs}
+        source: ${COSMIC_CACHE_PATH:-${COSMIC_SOURCE_PATH:-..}/.cache}/huggingface
+        target: /workspace/.cache/huggingface
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${COSMIC_OUTPUT_PATH:-${COSMIC_SOURCE_PATH:-..}/outputs}
         target: /workspace/app/outputs
         bind:
           create_host_path: true
       - type: bind
-        source: ${COSMIC_WEIGHTS_PATH:-${COSMIC_SOURCE_PATH}/data/OvSGTR/weights}
+        source: ${COSMIC_WEIGHTS_PATH:-${COSMIC_SOURCE_PATH:-..}/data/OvSGTR/weights}
         target: /workspace/app/data/OvSGTR/weights
         read_only: true
         bind:
