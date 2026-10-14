@@ -163,7 +163,8 @@ publishes the csMachine working copy to shared storage. scripts/lab.sh builds
 and exports the environment on csMachine, then loads it and starts train/valid
 containers on ginger. The container mounts the existing config.yaml paths.
 The shared source is /radish/phamd/duypd-proj/COSMIC, alongside SG-Retrieval,
-with Datasets -> ../SG-Retrieval/Datasets created by the sync script.
+and the copy script uses cp to update source files. Docker mounts
+SG-Retrieval/Datasets directly at /workspace/app/Datasets.
 
 See [data/OVSGTR_SETUP.md](data/OVSGTR_SETUP.md) for local inference dependencies,
 CUDA build scripts, assets, provenance and full-graph export. See

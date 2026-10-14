@@ -30,21 +30,21 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        # Resolve app/Datasets -> ../SG-Retrieval/Datasets inside the container.
-        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH}/Datasets
-        target: /workspace/SG-Retrieval/Datasets
+        # Read existing NAS datasets directly; no host symlink is required.
+        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH}/../SG-Retrieval/Datasets}
+        target: /workspace/app/Datasets
         read_only: true
         bind:
           create_host_path: false
       - type: bind
         # Preserve the existing YAML's singular Dataset path.
-        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH}/Datasets
+        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH}/../SG-Retrieval/Datasets}
         target: /workspace/app/Dataset
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${COSMIC_SOURCE_PATH:?Set COSMIC_SOURCE_PATH}/Datasets/Pitts30k
+        source: ${COSMIC_DATASETS_PATH:-${COSMIC_SOURCE_PATH}/../SG-Retrieval/Datasets}/Pitts30k
         target: /workspace/app/Pitts30k
         read_only: true
         bind:

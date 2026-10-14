@@ -5,7 +5,7 @@
 | Windows | Edit code, commit and push |
 | csMachine: ~/ThisPC-DuyPC/COSMIC | Git working copy; fetch/pull and build the environment image |
 | /radish/phamd/duypd-proj/COSMIC | Shared source, pretrained assets, image archive and outputs |
-| /radish/phamd/duypd-proj/SG-Retrieval/Datasets | Existing datasets, accessed through COSMIC/Datasets |
+| /radish/phamd/duypd-proj/SG-Retrieval/Datasets | Existing datasets, mounted directly into Docker |
 | ginger | Load the image; select the GPU when launching training or validation |
 
 Ginger already mounts the SMB radish share. The container reads source directly
@@ -23,7 +23,7 @@ The runtime check verifies both CUDA discovery and a CUDA matrix multiplication.
 The image is for training/validation with existing OSGs; the Windows
 GroundingDINO extension is not part of the image.
 
-## 1. Synchronize source on csMachine
+## 1. Copy source on csMachine
 
 After pushing the Windows changes, on csMachine:
 
@@ -31,17 +31,18 @@ After pushing the Windows changes, on csMachine:
     git pull --ff-only
     bash scripts/sync_radish.sh
 
-The destination is /radish/phamd/duypd-proj/COSMIC, alongside SG-Retrieval.
-The script creates Datasets -> ../SG-Retrieval/Datasets in COSMIC.
-An existing link to the same dataset directory is kept or made relative; an
-unrelated link or a real Datasets directory causes the script to stop.
-The sync updates code and removes obsolete code files in that destination.
-It protects datasets,
-weights, caches, outputs and the local environment file; it does not copy .git.
-The destination must be a COSMIC directory below the mounted /radish share.
-The source revision is recorded in .cosmic-revision.
-Sync compares file contents and leaves destination permissions/timestamps to
-the SMB share, avoiding the attribute-preservation issue seen with scp -p.
+The source is the project containing scripts/sync_radish.sh, normally
+~/ThisPC-DuyPC/COSMIC. The destination defaults to
+/radish/phamd/duypd-proj/COSMIC, alongside SG-Retrieval.
+The script checks required source files, creates the destination, and uses cp
+to overwrite source files with the current working copy. It checks the required
+files again after copying. An optional first argument overrides the destination.
+
+Datasets, weights, caches, outputs, .git and private environment files are
+excluded. The small OvSGTR assets_manifest.json is copied with the source.
+Existing runtime files and obsolete source files remain at the destination.
+Copying uses regular files and does not follow source symlinks or preserve
+timestamps/ownership. The script does not require rsync, Git, or a dataset link.
 
 Synchronize before starting a new run. Keep the source unchanged for the duration
 of a running experiment; fetch newer code into the csMachine working copy while
@@ -53,7 +54,6 @@ Expected shared layout:
       COSMIC/
         main.py
         config.yaml
-        Datasets -> ../SG-Retrieval/Datasets
         .devcontainer/.env
         data/OvSGTR/weights/bert-base-uncased/
         .cache/visual_backbones/
@@ -64,21 +64,13 @@ Expected shared layout:
           GSV_CITITES/{Dataframes,Images,osg}/
           Pitts30k/{images,metadata,osg}/
 
-The symlink uses Linux's existing SG-Retrieval capitalization. Datasets is
-excluded from source synchronization and Git, including when it is a symlink.
-The data remains in SG-Retrieval/Datasets.
-
-Because radish is an SMB share, both csMachine and ginger must support the
-symlink on their mounts. On ginger, verify it before starting Docker:
+Data remains in SG-Retrieval/Datasets. Docker reads that directory directly,
+so source copying and training do not depend on symlink support on the SMB mount.
+On ginger, verify the source and data paths before starting Docker:
 
     cd /radish/phamd/duypd-proj/COSMIC
-    readlink Datasets
-    ls Datasets/GSV_CITITES Datasets/Pitts30k
-
-If symlink creation fails, or ginger sees a regular file instead of a link,
-ask the lab administrator to check the CIFS mount's symlink support on both
-machines. CIFS provides the mfsymlinks mount option for this purpose; the script
-does not change mounts. See the [Linux CIFS documentation](https://docs.kernel.org/5.19/admin-guide/cifs/usage.html).
+    ls main.py config.yaml
+    ls ../SG-Retrieval/Datasets/GSV_CITITES ../SG-Retrieval/Datasets/Pitts30k
 
 ## 2. Set the local paths
 
@@ -105,17 +97,17 @@ visible to CUDA. An explicitly empty value hides all GPUs.
 The current training pipeline uses one GPU per run; making multiple GPUs
 visible does not distribute training across them.
 
-Set COSMIC_SOURCE_PATH=/radish/phamd/duypd-proj/COSMIC, including in an existing
-.devcontainer/.env created with the previous layout. Dataset paths are derived
-from COSMIC_SOURCE_PATH/Datasets; COSMIC_DATASETS_PATH is no longer used.
+Set COSMIC_SOURCE_PATH=/radish/phamd/duypd-proj/COSMIC and
+COSMIC_DATASETS_PATH=/radish/phamd/duypd-proj/SG-Retrieval/Datasets, including
+in an existing .devcontainer/.env. When COSMIC_DATASETS_PATH is omitted, Docker
+defaults to COSMIC_SOURCE_PATH/../SG-Retrieval/Datasets.
 Optional cache/output/weight path overrides also refer to paths accessible on
 ginger. Dataset mounts
 are read-only; source, cache and output mounts are writable. Missing source/data/
 weight directories cause startup to fail rather than creating empty datasets.
 
 Inside Docker, source is mounted at /workspace/app and data at
-/workspace/SG-Retrieval/Datasets. The relative app/Datasets symlink therefore
-resolves inside the container too.
+/workspace/app/Datasets. Dataset mounts are read-only.
 
 config.yaml retains Dataset/GSV_CITITES, Pitts30k and outputs/gsv. Additional bind
 mounts provide those paths, so no Windows/server-specific config duplicate is
@@ -185,7 +177,7 @@ After it exits, inspect its exit code with docker inspect:
 
 A short foreground run uses the same pipeline, including final full validation:
 
-    CUDA_VISIBLE_DEVICES=3 bash scripts/lab.sh train --epochs 1 --max-train-batches 2
+    CUDA_VISIBLE_DEVICES=3 bash scripts/lab.sh train --epochs 1 --max-train-batches 2 --output-dir outputs/lab_smoke
 
 Resume a completed-epoch checkpoint using the original training settings:
 
