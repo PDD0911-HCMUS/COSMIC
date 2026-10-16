@@ -8,7 +8,7 @@ device: cpu
 data:
   dataset: pitts30k
   root: Pitts30k
-  batch_size: 8
+  batch_size: 128  # Đồng bộ với batch validation trong config.yaml.
   num_workers: 0
   shuffle: false
   pin_memory: false
