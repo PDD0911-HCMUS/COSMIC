@@ -12,7 +12,7 @@ data:
   dataset: gsv  # Tên trong DATASET_NAMES của registry.py.
   root: Dataset/GSV_CITITES
   osg_root: null
-  batch_size: 32  # 32 cặp: 16 positive + 16 negative; 64 ảnh từ 16 địa điểm.
+  batch_size: 128  # 128 cặp: 64 positive + 64 negative; 256 ảnh từ 64 địa điểm.
   images_per_place: 4  # 4 ảnh/địa điểm, mỗi ảnh dùng một lần trong batch.
   num_workers: 4  # Đã đo trên máy RTX 3070 / RAM 64 GB; giúp đọc OSG nhanh hơn.
   shuffle: true

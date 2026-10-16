@@ -105,8 +105,10 @@ For an interactive container:
     bash scripts/lab.sh shell
 
 It opens /workspace/app. In that terminal, select CUDA_VISIBLE_DEVICES when
-starting Python. VS Code Remote SSH to ginger can also open the shared COSMIC
-directory with Dev Containers: Reopen in Container.
+starting Python. In VS Code, connect to ginger with Remote - SSH, open
+/radish/phamd/duypd-proj/COSMIC, then run Dev Containers: Reopen in Container.
+Opening the development container does not run the dataset check automatically.
+Run lab.sh check manually after the dataset transfer finishes.
 
 ## Mounts and settings
 

@@ -18,6 +18,5 @@
         ]
       }
     }
-  },
-  "postCreateCommand": "python -B scripts/check_lab_runtime.py"
+  }
 }
