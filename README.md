@@ -130,6 +130,31 @@ model/optimizer/scheduler/scaler states, configuration, RNG state and completed
 epochs. Resume starts at the next epoch. Checkpoint selection uses the separate
 validation metrics and save.monitor; training loss is not substituted for recall.
 
+### Uncompressed OSGs on shared storage
+
+On csMachine (or the ginger host), expand the existing graphs without loading
+OvSGTR or using a GPU:
+
+    cd /radish/phamd/duypd-proj/COSMIC
+    python3 -u -B scripts/decompress_osg.py \
+        /radish/phamd/duypd-proj/SG-Retrieval/Datasets/GSV_CITITES/osg \
+        /radish/phamd/duypd-proj/SG-Retrieval/Datasets/Pitts30k/osg \
+        --workers 4
+
+This creates sibling .json files atomically and keeps every .json.gz source.
+Existing JSONs are compared byte-for-byte with decompressed source data, so the
+same command can resume an interrupted conversion. Conflicting JSONs stop the
+conversion instead of being overwritten. After each root succeeds, its
+manifest/index switches to json, with the original metadata backed up.
+Graph contents, generation IDs, completion counts and training config stay the
+same. The script also accepts an AmsterTime osg root and updates indexed paths.
+
+Run on a host: dataset mounts inside the training container are read-only.
+An already-running loader keeps its old manifest; use plain JSON on the next
+training start/resume after a completed checkpoint. Extraction shares NAS
+bandwidth with training. It removes gzip decompression from subsequent reads;
+JSON parsing, graph validation and image hashing still remain.
+
 Final comparison has its own entry point and configuration:
 
     python -B -m comparison.run --config configs/comparison.yaml --dry-run
