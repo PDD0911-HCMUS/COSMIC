@@ -12,6 +12,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import time
@@ -20,12 +21,17 @@ import time
 CHUNK_SIZE = 1024 * 1024
 
 
-def expand_file(source: Path) -> tuple[str, int]:
+def expand_file(source: Path, *, fast: bool = False) -> tuple[str, int]:
     """Publish complete output atomically; verify existing output byte for byte."""
     target = source.with_suffix("")
-    if source.is_symlink() or target.is_symlink():
+    # One target lookup instead of separate symlink/existence queries on SMB.
+    try:
+        target_stat = target.lstat()
+    except FileNotFoundError:
+        target_stat = None
+    if source.is_symlink() or (target_stat is not None and stat.S_ISLNK(target_stat.st_mode)):
         raise ValueError(f"Refusing a symbolic-link graph: {source} / {target}")
-    if target.exists():
+    if target_stat is not None:
         size = 0
         with gzip.open(source, "rb") as compressed, target.open("rb") as existing:
             while chunk := compressed.read(CHUNK_SIZE):
@@ -49,8 +55,10 @@ def expand_file(source: Path) -> tuple[str, int]:
                     size += len(chunk)
                 # Reading through EOF also checks gzip CRC/length before publication.
                 output.flush()
-                os.fsync(output.fileno())
+                if not fast:
+                    os.fsync(output.fileno())
         os.replace(temporary, target)
+        temporary = None  # The rename consumed it; avoid a failed SMB unlink.
         return "written", size
     finally:
         if temporary is not None:
@@ -72,7 +80,7 @@ def discover(root: Path) -> list[Path]:
     return sorted(sources)
 
 
-def convert_files(sources: list[Path], workers: int) -> None:
+def convert_files(sources: list[Path], workers: int, *, fast: bool = False) -> None:
     """Bound queued work so a 500k-file dataset does not create 500k futures."""
     total = len(sources)
     written = verified = size = done_count = 0
@@ -84,7 +92,7 @@ def convert_files(sources: list[Path], workers: int) -> None:
         def submit_one():
             source = next(iterator, None)
             if source is not None:
-                pending.add(executor.submit(expand_file, source))
+                pending.add(executor.submit(expand_file, source, fast=fast))
 
         for _ in range(min(total, workers * 2)):
             submit_one()
@@ -100,10 +108,14 @@ def convert_files(sources: list[Path], workers: int) -> None:
                     done_count += 1
                     now = time.monotonic()
                     if done_count == 1 or done_count % 1000 == 0 or now - last_message >= 10 or done_count == total:
+                        elapsed = max(now - started, 1e-9)
+                        rate = done_count / elapsed
+                        eta_hours = (total - done_count) / rate / 3600
                         print(
                             f"[{done_count:,}/{total:,}] new={written:,} verified={verified:,} "
                             f"JSON={size / 1024**3:.2f} GiB "
-                            f"elapsed={(now - started) / 60:.1f} min",
+                            f"elapsed={elapsed / 60:.1f} min | "
+                            f"avg={rate:.1f} files/s ETA={eta_hours:.1f} h",
                             flush=True,
                         )
                         last_message = now
@@ -137,6 +149,7 @@ def atomic_bytes(path: Path, content: bytes) -> None:
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
+        temporary = None
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
@@ -182,6 +195,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("osg_roots", type=Path, nargs="+", help="Dataset osg directories, each with a manifest/index")
     parser.add_argument("--workers", type=int, default=4, help="Concurrent extraction workers (default: 4)")
+    parser.add_argument(
+        "--fast", action="store_true",
+        help="Skip per-graph fsync on NAS; atomic rename/CRC checks remain, but power-loss durability is deferred",
+    )
     args = parser.parse_args(argv)
     if args.workers < 1:
         parser.error("--workers must be positive")
@@ -189,13 +206,19 @@ def main(argv=None) -> int:
     try:
         # Reject wrong paths before starting a long conversion of another dataset.
         jobs = [(root, *read_metadata(root)) for root in roots]
+        if args.fast:
+            print(
+                "Fast mode: per-graph fsync disabled; files are closed before atomic rename. "
+                "Power-loss durability is deferred; gzip originals are kept.",
+                flush=True,
+            )
         for root, metadata_path, original, metadata in jobs:
             print(f"\nOSG root: {root}\nScanning compressed graphs...", flush=True)
             sources = discover(root)
             if not sources and metadata["graph_format"] == "json_gzip":
                 raise ValueError(f"No .json.gz files found; cannot verify this gzip export: {root}")
             print(f"Found {len(sources):,} gzip graphs | workers={args.workers}", flush=True)
-            convert_files(sources, args.workers)
+            convert_files(sources, args.workers, fast=args.fast)
             activate_json(root, metadata_path, original, metadata)
         print("\nDone. Gzip originals kept. New loader instances prefer plain JSON.", flush=True)
         return 0

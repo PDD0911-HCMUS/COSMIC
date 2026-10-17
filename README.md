@@ -149,6 +149,15 @@ manifest/index switches to json, with the original metadata backed up.
 Graph contents, generation IDs, completion counts and training config stay the
 same. The script also accepts an AmsterTime osg root and updates indexed paths.
 
+For CIFS/NAS throughput, add --fast to avoid forcing a storage flush after
+every graph. Files are still closed before atomic rename, gzip CRC is checked,
+and existing JSONs are still compared byte-for-byte. This defers power-loss
+durability for generated JSON copies; gzip originals are retained. Metadata
+writes still use fsync. Omitting --fast keeps per-graph fsync enabled.
+Progress includes average files/second and an approximate remaining time.
+Restarting still verifies existing copies, so its initial rate may differ
+from the rate while writing new files.
+
 Run on a host: dataset mounts inside the training container are read-only.
 An already-running loader keeps its old manifest; use plain JSON on the next
 training start/resume after a completed checkpoint. Extraction shares NAS

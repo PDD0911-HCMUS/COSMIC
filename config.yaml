@@ -101,7 +101,7 @@ training:
   accumulation_steps: 1
   grad_clip_norm: 1.0
   validate_every: 1
-  log_every: 50
+  log_every: 5
   max_batches_per_epoch: null
   optimizer:
     name: adamw
@@ -126,7 +126,7 @@ validation:
   query_chunk_size: 128
   database_chunk_size: 4096
   pair_threshold: 0.5
-  log_every: 50
+  log_every: 5
   save_reports: true
   directory: validation
 
