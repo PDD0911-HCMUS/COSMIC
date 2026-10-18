@@ -55,8 +55,8 @@ def read_json(path: Path) -> dict:
     try:
         with opener(path, "rt", encoding="utf-8") as stream:
             return json.load(stream)
-    except (EOFError, zlib.error) as exc:
-        raise ValueError(f"Incomplete or corrupt gzip JSON: {path}") from exc
+    except (json.JSONDecodeError, UnicodeError, EOFError, zlib.error, gzip.BadGzipFile) as exc:
+        raise ValueError(f"Invalid JSON file {path}: {exc}") from exc
 
 
 def graph_file_path(json_path: Path, graph_format: str) -> Path:

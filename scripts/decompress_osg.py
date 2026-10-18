@@ -21,8 +21,22 @@ import time
 CHUNK_SIZE = 1024 * 1024
 
 
-def expand_file(source: Path, *, fast: bool = False) -> tuple[str, int]:
-    """Publish complete output atomically; verify existing output byte for byte."""
+def check_graph(path: Path, generation_id: str | None) -> None:
+    """Validate graph contents/provenance without loading torch or encoders."""
+    from data.osg_storage import read_json, validate_graph
+
+    try:
+        graph = read_json(path)
+        validate_graph(graph)
+        if generation_id is not None and graph["provenance"]["generation_id"] != generation_id:
+            raise ValueError("Generation fingerprint differs from the dataset manifest")
+    except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:
+        raise ValueError(f"Invalid OSG {path}: {error}") from error
+
+
+def expand_file(source: Path, *, fast: bool = False, repair: bool = False,
+                generation_id: str | None = None) -> tuple[str, int]:
+    """Verify copies, or repair invalid JSONs from validated gzip originals."""
     target = source.with_suffix("")
     # One target lookup instead of separate symlink/existence queries on SMB.
     try:
@@ -31,7 +45,14 @@ def expand_file(source: Path, *, fast: bool = False) -> tuple[str, int]:
         target_stat = None
     if source.is_symlink() or (target_stat is not None and stat.S_ISLNK(target_stat.st_mode)):
         raise ValueError(f"Refusing a symbolic-link graph: {source} / {target}")
-    if target_stat is not None:
+    if repair and target_stat is not None:
+        try:
+            check_graph(target, generation_id)
+        except ValueError as error:
+            print(f"Repairing {target}: {error}", flush=True)
+        else:
+            return "verified", target_stat.st_size
+    elif target_stat is not None:
         size = 0
         with gzip.open(source, "rb") as compressed, target.open("rb") as existing:
             while chunk := compressed.read(CHUNK_SIZE):
@@ -57,15 +78,21 @@ def expand_file(source: Path, *, fast: bool = False) -> tuple[str, int]:
                 output.flush()
                 if not fast:
                     os.fsync(output.fileno())
+        if repair:
+            # Never replace an invalid copy with invalid source graph content.
+            try:
+                check_graph(temporary, generation_id)
+            except ValueError as error:
+                raise ValueError(f"Cannot restore {target} from {source}: {error}") from error
         os.replace(temporary, target)
         temporary = None  # The rename consumed it; avoid a failed SMB unlink.
-        return "written", size
+        return ("repaired" if target_stat is not None else "written"), size
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
 
-def discover(root: Path) -> list[Path]:
+def discover(root: Path, *, include_plain: bool = False) -> list[Path]:
     sources = []
     last_message = time.monotonic()
 
@@ -74,25 +101,37 @@ def discover(root: Path) -> list[Path]:
 
     for directory, _, filenames in os.walk(root, followlinks=False, onerror=scan_error):
         sources.extend(Path(directory) / name for name in filenames if name.endswith(".json.gz"))
+        if include_plain:
+            names = set(filenames)
+            for name in filenames:
+                if not name.endswith(".json") or name + ".gz" in names:
+                    continue
+                if Path(directory) == root and name in ("manifest.json", "index.json"):
+                    continue
+                # Validate plain-only copies too; gzip is needed only if repair is required.
+                sources.append(Path(directory) / (name + ".gz"))
         if time.monotonic() - last_message >= 10:
-            print(f"Scanning: {len(sources):,} gzip graphs found", flush=True)
+            print(f"Scanning: {len(sources):,} graph candidates found", flush=True)
             last_message = time.monotonic()
     return sorted(sources)
 
 
-def convert_files(sources: list[Path], workers: int, *, fast: bool = False) -> None:
+def convert_files(sources: list[Path], workers: int, *, fast: bool = False,
+                  repair: bool = False, generation_id: str | None = None) -> None:
     """Bound queued work so a 500k-file dataset does not create 500k futures."""
     total = len(sources)
-    written = verified = size = done_count = 0
+    written = verified = repaired = size = done_count = 0
     started = last_message = time.monotonic()
     iterator = iter(sources)
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        pending = set()
+        pending = {}
 
         def submit_one():
             source = next(iterator, None)
             if source is not None:
-                pending.add(executor.submit(expand_file, source, fast=fast))
+                future = executor.submit(expand_file, source, fast=fast, repair=repair,
+                                         generation_id=generation_id)
+                pending[future] = source
 
         for _ in range(min(total, workers * 2)):
             submit_one()
@@ -100,10 +139,14 @@ def convert_files(sources: list[Path], workers: int, *, fast: bool = False) -> N
             while pending:
                 completed, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for future in completed:
-                    pending.remove(future)
-                    action, byte_count = future.result()
+                    source = pending.pop(future)
+                    try:
+                        action, byte_count = future.result()
+                    except Exception as error:
+                        raise ValueError(f"OSG conversion failed for {source}: {error}") from error
                     written += action == "written"
                     verified += action == "verified"
+                    repaired += action == "repaired"
                     size += byte_count
                     done_count += 1
                     now = time.monotonic()
@@ -112,7 +155,7 @@ def convert_files(sources: list[Path], workers: int, *, fast: bool = False) -> N
                         rate = done_count / elapsed
                         eta_hours = (total - done_count) / rate / 3600
                         print(
-                            f"[{done_count:,}/{total:,}] new={written:,} verified={verified:,} "
+                            f"[{done_count:,}/{total:,}] new={written:,} verified={verified:,} repaired={repaired:,} "
                             f"JSON={size / 1024**3:.2f} GiB "
                             f"elapsed={elapsed / 60:.1f} min | "
                             f"avg={rate:.1f} files/s ETA={eta_hours:.1f} h",
@@ -199,9 +242,15 @@ def main(argv=None) -> int:
         "--fast", action="store_true",
         help="Skip per-graph fsync on NAS; atomic rename/CRC checks remain, but power-loss durability is deferred",
     )
+    parser.add_argument(
+        "--repair", action="store_true",
+        help="Validate existing JSON graphs; replace invalid ones from validated gzip originals",
+    )
     args = parser.parse_args(argv)
     if args.workers < 1:
         parser.error("--workers must be positive")
+    # Script execution sets sys.path to scripts/, not the project root.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     roots = list(dict.fromkeys(path.expanduser().resolve() for path in args.osg_roots))
     try:
         # Reject wrong paths before starting a long conversion of another dataset.
@@ -212,13 +261,17 @@ def main(argv=None) -> int:
                 "Power-loss durability is deferred; gzip originals are kept.",
                 flush=True,
             )
+        if args.repair:
+            print("Repair mode: validate plain graphs/provenance; restore invalid copies from gzip.", flush=True)
         for root, metadata_path, original, metadata in jobs:
-            print(f"\nOSG root: {root}\nScanning compressed graphs...", flush=True)
-            sources = discover(root)
+            print(f"\nOSG root: {root}\nScanning graphs...", flush=True)
+            sources = discover(root, include_plain=args.repair)
             if not sources and metadata["graph_format"] == "json_gzip":
                 raise ValueError(f"No .json.gz files found; cannot verify this gzip export: {root}")
-            print(f"Found {len(sources):,} gzip graphs | workers={args.workers}", flush=True)
-            convert_files(sources, args.workers, fast=args.fast)
+            kind = "graph candidates" if args.repair else "gzip graphs"
+            print(f"Found {len(sources):,} {kind} | workers={args.workers}", flush=True)
+            convert_files(sources, args.workers, fast=args.fast, repair=args.repair,
+                          generation_id=metadata.get("generation_id"))
             activate_json(root, metadata_path, original, metadata)
         print("\nDone. Gzip originals kept. New loader instances prefer plain JSON.", flush=True)
         return 0

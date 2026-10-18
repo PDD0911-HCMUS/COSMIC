@@ -37,7 +37,8 @@ class TrainEngine:
     fit(loader, validate=None) optionally accepts validate(model, epoch), returning
     a mapping of validation metrics. Epoch numbers exposed to callers are 1-based.
     No validation dataset is chosen here. Without a callback, best selection is
-    disabled. Checkpoints resume at completed epoch boundaries, not mid-epoch.
+    disabled. A pending_validation checkpoint resumes validation of a trained
+    epoch; normal checkpoints resume at the next epoch, never mid-epoch.
     main creates the model on the target device, criteria, optimizer, scheduler
     and scaler. This engine does not construct those components.
     """
@@ -84,6 +85,7 @@ class TrainEngine:
         self.autocast_dtype = torch.float16 if precision == "amp_fp16" else torch.bfloat16
         self.start_epoch, self.global_step = 0, 0
         self.best_metric, self.history = None, []
+        self.pending_validation = None
 
     def _batch_losses(self, batch):
         if not isinstance(batch, Mapping) or not all(side in batch for side in ("a", "b", "label")):
@@ -193,51 +195,73 @@ class TrainEngine:
             raise ValueError("validate must be callable: validate(model, epoch) -> metrics")
         if self.config.save.resume is not None:
             self._resume(loader)
-        if self.start_epoch >= self.config.training.epochs:
+        if self.pending_validation is not None and validate is None:
+            raise ValueError("This checkpoint needs validation; supply validation inputs before resuming")
+        if self.start_epoch >= self.config.training.epochs and self.pending_validation is None:
             print(f"Checkpoint already completed {self.start_epoch} epochs; no training remains.", flush=True)
             return self.history
         directory = Path(self.context.directory)
-        if (self.config.save.enabled and self.config.save.resume is None
-                and (Path(self.context.checkpoint_dir) / "last.pt").exists()):
-            raise FileExistsError("This output already has last.pt; use save.resume/--resume "
-                                  "or choose another output directory")
+        if self.config.save.enabled and self.config.save.resume is None:
+            for name in ("pending_validation.pt", "last.pt"):
+                if (Path(self.context.checkpoint_dir) / name).exists():
+                    raise FileExistsError(f"This output already has {name}; use save.resume/--resume "
+                                          "or choose another output directory")
         directory.mkdir(parents=True, exist_ok=True)
         if validate is None:
             print("No validation callback: training losses are logged; best-checkpoint selection is disabled.", flush=True)
         print(f"Trainable parameters: {sum(p.numel() for p in self.parameters):,} | "
               f"precision={self.config.training.precision} | "
               f"accumulation={self.config.training.accumulation_steps}", flush=True)
-        for completed in range(self.start_epoch, self.config.training.epochs):
+        first = self.start_epoch - int(self.pending_validation is not None)
+        for completed in range(first, self.config.training.epochs):
             epoch = completed + 1
-            metrics = self.train_one_epoch(loader, epoch)
+            retry_validation = self.pending_validation is not None
+            if retry_validation:
+                metrics = self.pending_validation["train"]
+                print(f"Retrying validation for trained epoch {epoch}; training is not repeated.", flush=True)
+            else:
+                metrics = self.train_one_epoch(loader, epoch)
+                # Persist the next epoch's LR with the completed training phase.
+                # A pending-validation resume must not advance it a second time.
+                if self.scheduler is not None and metrics["optimizer_steps"] > 0:
+                    self.scheduler.step()
             validation = None
             improved = False
-            if validate is not None and (epoch % self.config.training.validate_every == 0
+            if validate is not None and (retry_validation or epoch % self.config.training.validate_every == 0
                                         or epoch == self.config.training.epochs):
-                self.model.eval()
-                with torch.no_grad():
-                    result = validate(self.model, epoch)
-                if not isinstance(result, Mapping):
-                    raise ValueError("Validation must return a mapping of scalar metrics")
-                validation = {key: float(value) for key, value in result.items()}
-                if any(not math.isfinite(value) for value in validation.values()):
-                    raise ValueError("Validation metrics must be finite")
-                if self.config.save.enabled and self.config.save.save_best:
-                    monitor = self.config.save.monitor
-                    if monitor not in validation:
-                        raise ValueError(f"Validation did not return checkpoint metric {monitor!r}")
-                    value = validation[monitor]
-                    improved = self.best_metric is None or (
-                        value < self.best_metric if self.config.save.mode == "min" else value > self.best_metric)
-                    if improved:
-                        self.best_metric = value
-            if self.scheduler is not None and metrics["optimizer_steps"] > 0:
-                self.scheduler.step()
+                if self.config.save.enabled:
+                    self._save_pending_validation(epoch, loader, metrics)
+                try:
+                    self.model.eval()
+                    with torch.no_grad():
+                        result = validate(self.model, epoch)
+                    if not isinstance(result, Mapping):
+                        raise ValueError("Validation must return a mapping of scalar metrics")
+                    validation = {key: float(value) for key, value in result.items()}
+                    if any(not math.isfinite(value) for value in validation.values()):
+                        raise ValueError("Validation metrics must be finite")
+                    if self.config.save.enabled and self.config.save.save_best:
+                        monitor = self.config.save.monitor
+                        if monitor not in validation:
+                            raise ValueError(f"Validation did not return checkpoint metric {monitor!r}")
+                        value = validation[monitor]
+                        improved = self.best_metric is None or (
+                            value < self.best_metric if self.config.save.mode == "min" else value > self.best_metric)
+                        if improved:
+                            self.best_metric = value
+                except BaseException:
+                    if self.config.save.enabled:
+                        path = Path(self.context.checkpoint_dir) / "pending_validation.pt"
+                        print(f"Validation interrupted. Trained epoch saved: {path}. "
+                              "Use --resume with this checkpoint to retry validation.", flush=True)
+                    raise
             self.history.append({"epoch": epoch, "global_step": self.global_step,
                                  "train": metrics, "validation": validation})
             write_json_atomic(directory / "training_history.json", {"epochs": self.history})
             if self.config.save.enabled:
                 self._save(epoch, loader, improved)
+                (Path(self.context.checkpoint_dir) / "pending_validation.pt").unlink(missing_ok=True)
+            self.pending_validation = None
         return self.history
 
     def _rng_state(self, loader):
@@ -248,15 +272,27 @@ class TrainEngine:
                 "cuda": torch.cuda.get_rng_state_all() if self.device.type == "cuda" else None,
                 "loader": generator.get_state() if generator is not None else None}
 
+    def _checkpoint_payload(self, epoch, loader):
+        return {"format_version": 1, "epoch": epoch, "global_step": self.global_step,
+                "model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(),
+                "scheduler": self.scheduler.state_dict() if self.scheduler is not None else None,
+                "scaler": self.scaler.state_dict(), "best_metric": self.best_metric,
+                "history": self.history, "config": config_to_dict(self.config),
+                "rng": self._rng_state(loader)}
+
+    def _save_pending_validation(self, epoch, loader, metrics):
+        directory = Path(self.context.checkpoint_dir).resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = self._checkpoint_payload(epoch, loader)
+        payload["pending_validation"] = {"epoch": epoch, "train": metrics}
+        path = directory / "pending_validation.pt"
+        self._atomic_checkpoint(payload, path)
+        print(f"Checkpoint before validation: {path} (trained epoch {epoch})", flush=True)
+
     def _save(self, epoch, loader, improved):
         directory = Path(self.context.checkpoint_dir).resolve()
         directory.mkdir(parents=True, exist_ok=True)
-        payload = {"format_version": 1, "epoch": epoch, "global_step": self.global_step,
-                   "model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(),
-                   "scheduler": self.scheduler.state_dict() if self.scheduler is not None else None,
-                   "scaler": self.scaler.state_dict(), "best_metric": self.best_metric,
-                   "history": self.history, "config": config_to_dict(self.config),
-                   "rng": self._rng_state(loader)}
+        payload = self._checkpoint_payload(epoch, loader)
         self._atomic_checkpoint(payload, directory / "last.pt")
         if epoch % self.config.save.save_every == 0 or epoch == self.config.training.epochs:
             self._atomic_checkpoint(payload, directory / f"epoch_{epoch:08d}.pt")
@@ -280,6 +316,7 @@ class TrainEngine:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
+            temporary = None
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
@@ -290,6 +327,12 @@ class TrainEngine:
                     "scaler", "best_metric", "history", "config", "rng"}
         if not isinstance(payload, dict) or not required.issubset(payload) or payload["format_version"] != 1:
             raise ValueError("Resume requires a full TrainEngine checkpoint, not encoder-only weights")
+        pending = payload.get("pending_validation")
+        if pending is not None and (
+                not isinstance(pending, dict) or pending.get("epoch") != payload["epoch"]
+                or type(payload["epoch"]) is not int or payload["epoch"] <= 0
+                or not isinstance(pending.get("train"), dict) or "optimizer_steps" not in pending["train"]):
+            raise ValueError("Invalid pending-validation checkpoint")
         current, previous = config_to_dict(self.config), payload["config"]
         for section in ("model", "data", "seed"):
             if previous[section] != current[section]:
@@ -313,6 +356,7 @@ class TrainEngine:
         self.scaler.load_state_dict(payload["scaler"])
         self.start_epoch, self.global_step = payload["epoch"], payload["global_step"]
         self.best_metric, self.history = payload["best_metric"], payload["history"]
+        self.pending_validation = pending
         rng = payload["rng"]
         random.setstate(rng["python"])
         state = rng["numpy"]
@@ -323,5 +367,6 @@ class TrainEngine:
         generator = getattr(loader, "generator", None)
         if generator is not None and rng["loader"] is not None:
             generator.set_state(rng["loader"])
-        print(f"Resumed {self.config.save.resume}: completed epoch {self.start_epoch}, "
+        stage = "trained epoch awaiting validation" if pending is not None else "completed epoch"
+        print(f"Resumed {self.config.save.resume}: {stage} {self.start_epoch}, "
               f"optimizer step {self.global_step}", flush=True)
