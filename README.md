@@ -129,6 +129,16 @@ TrainEngine saves training_history.json and full checkpoints containing
 model/optimizer/scheduler/scaler states, configuration, RNG state and completed
 epochs. Resume starts at the next epoch. Checkpoint selection uses the separate
 validation metrics and save.monitor; training loss is not substituted for recall.
+Before validation, pending_validation.pt saves the trained epoch, optimizer,
+scheduler and RNG states. If validation fails, resume this checkpoint to retry
+validation without training that epoch again:
+
+    python -B main.py --config config.yaml --mode train --device cuda --resume outputs/gsv/checkpoints/pending_validation.pt
+
+The scheduler advances once after training, before the pending checkpoint.
+After successful validation, last.pt/best.pt and history are updated and the
+pending file is removed. Retrying validation does not advance the scheduler
+again. Existing normal checkpoints retain their previous resume behavior.
 
 ### Uncompressed OSGs on shared storage
 
@@ -163,6 +173,22 @@ An already-running loader keeps its old manifest; use plain JSON on the next
 training start/resume after a completed checkpoint. Extraction shares NAS
 bandwidth with training. It removes gzip decompression from subsequent reads;
 JSON parsing, graph validation and image hashing still remain.
+
+If a plain graph is empty, invalid JSON, fails graph validation or has the
+wrong generation ID, repair it from the retained gzip source on a writable
+host. For Pitts30k:
+
+    python3 -u -B scripts/decompress_osg.py \
+        /radish/phamd/duypd-proj/SG-Retrieval/Datasets/Pitts30k/osg \
+        --workers 4 --repair
+
+Repair mode validates existing plain graphs and their generation IDs. Valid
+copies are kept; missing/invalid copies are restored atomically only after
+their decompressed source passes the same checks. It keeps gzip originals,
+does not run OvSGTR and does not skip images or alter retrieval ground truth.
+Without --fast, each repaired graph uses fsync. If the gzip source is also
+invalid, the command stops with the source path instead of fabricating a graph.
+JSON read errors in training/validation now include the offending file path.
 
 Final comparison has its own entry point and configuration:
 
